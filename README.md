@@ -4,7 +4,7 @@ Sistema embarcado simulado de **monitoramento de temperatura para ambientes indu
 
 O projeto roda inteiramente no simulador **[Wokwi](https://wokwi.com)**, sem hardware físico, e envia a telemetria por **MQTT** para um **dashboard web** em tempo real.
 
-- Simulação sem MQTT (versão original): https://wokwi.com/projects/481245017381043201
+- Simulação sem MQTT (versão original): https://wokwi.com/projects/481403116305432577
 - Simulação com MQTT: _cole aqui o link da sua cópia no Wokwi_
 - Dashboard online: https://liamvitor.github.io/coldchain-monitor/ _(após ativar o GitHub Pages)_
 
