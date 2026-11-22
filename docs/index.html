@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ColdChain Monitor – Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+  :root { --bg:#0f1720; --card:#18232f; --line:#2a3a4a; --txt:#e8eef4; --mut:#8aa0b4;
+          --ok:#2ecc71; --warn:#f5a623; --bad:#ff4d4f; --info:#4da3ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--txt); }
+  header { display:flex; justify-content:space-between; align-items:center; padding:16px 24px; border-bottom:1px solid var(--line); flex-wrap:wrap; gap:8px; }
+  h1 { font-size:1.15rem; margin:0; }
+  .conn { font-size:.85rem; color:var(--mut); display:flex; align-items:center; gap:8px; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--bad); }
+  .dot.on { background:var(--ok); }
+  main { max-width:1000px; margin:0 auto; padding:20px; display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .card h2 { margin:0 0 8px; font-size:.75rem; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--mut); }
+  .big { font-size:3rem; font-weight:700; line-height:1.1; }
+  .wide { grid-column:1 / -1; }
+  .badge { display:inline-block; padding:6px 12px; border-radius:999px; font-weight:700; font-size:.95rem; background:var(--line); }
+  .badge.ok { background:rgba(46,204,113,.18); color:var(--ok); }
+  .badge.warn { background:rgba(245,166,35,.18); color:var(--warn); }
+  .badge.bad { background:rgba(255,77,79,.2); color:var(--bad); }
+  .bar { height:10px; background:var(--line); border-radius:6px; overflow:hidden; margin-top:10px; }
+  .bar > div { height:100%; width:0; background:var(--info); transition:width .3s; }
+  .sub { color:var(--mut); font-size:.85rem; margin-top:6px; }
+  canvas { width:100%; height:240px; display:block; }
+  ul { list-style:none; margin:0; padding:0; max-height:200px; overflow-y:auto; font-size:.9rem; }
+  li { padding:8px 0; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; gap:8px; }
+  li:last-child { border-bottom:0; }
+  .empty { color:var(--mut); }
+</style>
+</head>
+<body>
+<header>
+  <h1>ColdChain Monitor – Dashboard</h1>
+  <div class="conn"><span class="dot" id="dot"></span><span id="connTxt">Desconectado</span></div>
+</header>
+
+<main>
+  <section class="card"><h2>Temperatura</h2><div class="big" id="temp">--</div><div class="sub">Faixa segura: 2 a 8 °C</div></section>
+  <section class="card"><h2>Status</h2><span class="badge" id="status">Aguardando dados</span><div class="sub" id="last">Nenhuma leitura ainda</div></section>
+  <section class="card"><h2>Bateria</h2><div class="big" id="bat">--</div><div class="bar"><div id="batBar"></div></div></section>
+  <section class="card"><h2>Tempo fora da faixa</h2><div class="big" id="fora">–</div><div class="sub">Alertas recebidos: <b id="nAlert">0</b></div></section>
+
+  <section class="card wide"><h2>Temperatura em tempo real (últimas 60 leituras)</h2><canvas id="chart"></canvas></section>
+
+  <section class="card wide"><h2>Registro de alertas</h2><ul id="log"><li class="empty">Nenhum alerta recebido.</li></ul></section>
+</main>
+
+<script>
+  // ---- Configuração (use o mesmo prefixo do código do ESP32) ----
+  const BROKER = "wss://broker.hivemq.com:8884/mqtt";
+  const PREFIX = "liam/coldchain";
+  const TEMP_MIN = 2, TEMP_MAX = 8, MAX_PTS = 60;
+
+  const $ = id => document.getElementById(id);
+  const pts = [];
+  let foraStart = null, nAlert = 0;
+
+  function setConn(on) {
+    $("dot").classList.toggle("on", on);
+    $("connTxt").textContent = on ? "Conectado ao broker" : "Desconectado (tentando reconectar)";
+  }
+
+  function badgeClass(s) {
+    if (s === "OK") return "ok";
+    if (s.startsWith("ALERTA") || s === "FALHA_SENSOR") return "bad";
+    return "warn";
+  }
+
+  function update(d) {
+    const falha = d.status === "FALHA_SENSOR";
+    $("temp").textContent = falha ? "ERRO" : Number(d.temp).toFixed(1) + " °C";
+    $("status").textContent = d.status;
+    $("status").className = "badge " + badgeClass(d.status);
+    $("bat").textContent = d.bat + "%";
+    $("batBar").style.width = Math.max(0, Math.min(100, d.bat)) + "%";
+    $("batBar").style.background = d.bat <= 20 ? "var(--bad)" : "var(--info)";
+    $("last").textContent = "Última leitura: " + new Date().toLocaleTimeString("pt-BR");
+
+    const fora = d.status.startsWith("FORA") || d.status.startsWith("ALERTA");
+    if (fora) {
+      if (foraStart === null || d.t < foraStart) foraStart = d.t;
+      $("fora").textContent = Math.round((d.t - foraStart) / 1000) + " s";
+    } else {
+      foraStart = null;
+      $("fora").textContent = "–";
+    }
+
+    if (!falha) {
+      pts.push(Number(d.temp));
+      if (pts.length > MAX_PTS) pts.shift();
+      draw();
+    }
+  }
+
+  function addLog(d) {
+    nAlert++;
+    $("nAlert").textContent = nAlert;
+    const ul = $("log");
+    if (ul.firstChild && ul.firstChild.classList.contains("empty")) ul.innerHTML = "";
+    const li = document.createElement("li");
+    const t = d.status === "FALHA_SENSOR" ? "sensor com falha" : Number(d.temp).toFixed(1) + " °C";
+    li.innerHTML = "<span><b>" + d.status + "</b> – " + t + " – bat " + d.bat + "%</span><span>" +
+                   new Date().toLocaleTimeString("pt-BR") + "</span>";
+    ul.prepend(li);
+    while (ul.children.length > 30) ul.removeChild(ul.lastChild);
+  }
+
+  function draw() {
+    const cv = $("chart"), dpr = window.devicePixelRatio || 1;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    cv.width = w * dpr; cv.height = h * dpr;
+    const c = cv.getContext("2d");
+    c.scale(dpr, dpr);
+    c.clearRect(0, 0, w, h);
+    if (!pts.length) return;
+
+    const padL = 40, padR = 12, padT = 12, padB = 12;
+    const lo = Math.min(TEMP_MIN, ...pts) - 2, hi = Math.max(TEMP_MAX, ...pts) + 2;
+    const y = v => padT + (hi - v) / (hi - lo) * (h - padT - padB);
+    const x = i => padL + (pts.length < 2 ? 0 : i / (MAX_PTS - 1) * (w - padL - padR));
+
+    c.fillStyle = "rgba(46,204,113,.12)";
+    c.fillRect(padL, y(TEMP_MAX), w - padL - padR, y(TEMP_MIN) - y(TEMP_MAX));
+    c.strokeStyle = "#2a3a4a"; c.fillStyle = "#8aa0b4"; c.font = "11px system-ui"; c.lineWidth = 1;
+    [TEMP_MIN, TEMP_MAX].forEach(v => {
+      c.beginPath(); c.setLineDash([4, 4]); c.moveTo(padL, y(v)); c.lineTo(w - padR, y(v)); c.stroke();
+      c.setLineDash([]); c.fillText(v + "°", 8, y(v) + 4);
+    });
+
+    c.strokeStyle = "#4da3ff"; c.lineWidth = 2; c.beginPath();
+    pts.forEach((v, i) => i ? c.lineTo(x(i), y(v)) : c.moveTo(x(i), y(v)));
+    c.stroke();
+    pts.forEach((v, i) => {
+      c.fillStyle = (v < TEMP_MIN || v > TEMP_MAX) ? "#ff4d4f" : "#2ecc71";
+      c.beginPath(); c.arc(x(i), y(v), 3, 0, 7); c.fill();
+    });
+  }
+
+  // ---- MQTT ----
+  const client = mqtt.connect(BROKER, {
+    clientId: "dash-" + Math.random().toString(16).slice(2, 10),
+    reconnectPeriod: 3000
+  });
+  client.on("connect", () => { setConn(true); client.subscribe(PREFIX + "/#"); });
+  client.on("close", () => setConn(false));
+  client.on("message", (topic, buf) => {
+    let d;
+    try { d = JSON.parse(buf.toString()); } catch (e) { return; }
+    if (topic.endsWith("/alerta")) addLog(d);
+    else if (topic.endsWith("/telemetria")) update(d);
+  });
+
+  window.addEventListener("resize", draw);
+</script>
+</body>
+</html>

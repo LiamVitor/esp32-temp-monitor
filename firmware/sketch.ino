@@ -3,6 +3,8 @@
 #include <Adafruit_SSD1306.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <WiFi.h>
+#include <PubSubClient.h>
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -11,6 +13,18 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 #define ONE_WIRE_BUS 4
 #define PIN_BUZZER 15
+
+// ---------- Wi-Fi e MQTT ----------
+const char* WIFI_SSID = "Wokwi-GUEST";   // rede Wi-Fi simulada do Wokwi (sem senha)
+const char* WIFI_PASS = "";
+const char* MQTT_BROKER = "broker.hivemq.com";
+const int   MQTT_PORT = 1883;
+const char* TOPICO_TELEMETRIA = "liam/coldchain/telemetria";
+const char* TOPICO_ALERTA     = "liam/coldchain/alerta";
+
+WiFiClient wifiClient;
+PubSubClient mqtt(wifiClient);
+unsigned long ultima_tentativa_mqtt = 0;
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
@@ -131,6 +145,39 @@ void lerComandos() {
   }
 }
 
+void conectarWiFi() {
+  Serial.print("Conectando ao Wi-Fi");
+  WiFi.begin(WIFI_SSID, WIFI_PASS, 6);
+  unsigned long inicio = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - inicio < 10000) {
+    delay(250);
+    Serial.print(".");
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println(" OK");
+  } else {
+    Serial.println(" FALHOU (segue funcionando offline)");
+  }
+}
+
+// Tenta (re)conectar no broker no maximo a cada 5s, sem travar o sistema
+bool garantirMQTT() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  if (mqtt.connected()) return true;
+  if (millis() - ultima_tentativa_mqtt < 5000) return false;
+  ultima_tentativa_mqtt = millis();
+
+  String clientId = "coldchain-liam-" + String((uint32_t)esp_random(), HEX);
+  Serial.print("Conectando ao broker MQTT... ");
+  if (mqtt.connect(clientId.c_str())) {
+    Serial.println("OK");
+    return true;
+  }
+  Serial.print("falhou, rc=");
+  Serial.println(mqtt.state());
+  return false;
+}
+
 void setup() {
   Serial.begin(115200);
   pinMode(PIN_BUZZER, OUTPUT);
@@ -143,6 +190,10 @@ void setup() {
 
   display.clearDisplay();
   display.display();
+  conectarWiFi();
+  mqtt.setServer(MQTT_BROKER, MQTT_PORT);
+  mqtt.setKeepAlive(60);
+
   Serial.println("Pronto. Comandos: BAT <0-100> | HIST");
 }
 
@@ -196,15 +247,20 @@ void loop() {
 
   atualizarTela(temp, status_display, falha_sensor);
 
-  Serial.print("{\"t\":");
-  Serial.print(agora);
-  Serial.print(",\"temp\":");
-  Serial.print(falha_sensor ? -999.0 : temp, 2);
-  Serial.print(",\"bat\":");
-  Serial.print(bateria_pct);
-  Serial.print(",\"status\":\"");
-  Serial.print(status_log);
-  Serial.println("\"}");
+  // Monta o JSON uma unica vez: vai para a Serial e para o MQTT
+  char payload[140];
+  snprintf(payload, sizeof(payload),
+           "{\"t\":%lu,\"temp\":%.2f,\"bat\":%d,\"status\":\"%s\"}",
+           agora, falha_sensor ? -999.0 : temp, bateria_pct, status_log);
+  Serial.println(payload);
+
+  if (garantirMQTT()) {
+    mqtt.publish(TOPICO_TELEMETRIA, payload);
+    if (disparar_alerta_temp || bat_baixa || falha_sensor) {
+      mqtt.publish(TOPICO_ALERTA, payload);
+    }
+  }
+  mqtt.loop();
 
   // Aciona padroes distintos no buzzer
   if (disparar_alerta_temp) {
