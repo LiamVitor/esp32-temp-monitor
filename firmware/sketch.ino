@@ -19,8 +19,8 @@ const char* WIFI_SSID = "Wokwi-GUEST";   // rede Wi-Fi simulada do Wokwi (sem se
 const char* WIFI_PASS = "";
 const char* MQTT_BROKER = "broker.hivemq.com";
 const int   MQTT_PORT = 1883;
-const char* TOPICO_TELEMETRIA = "liam/coldchain/telemetria";
-const char* TOPICO_ALERTA     = "liam/coldchain/alerta";
+const char* TOPICO_TELEMETRIA = "esp32-temp-monitor/coldchain/telemetria";
+const char* TOPICO_ALERTA     = "esp32-temp-monitor/coldchain/alerta";
 
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
@@ -167,7 +167,7 @@ bool garantirMQTT() {
   if (millis() - ultima_tentativa_mqtt < 5000) return false;
   ultima_tentativa_mqtt = millis();
 
-  String clientId = "coldchain-liam-" + String((uint32_t)esp_random(), HEX);
+  String clientId = "esp32-temp-monitor-" + String((uint32_t)esp_random(), HEX);
   Serial.print("Conectando ao broker MQTT... ");
   if (mqtt.connect(clientId.c_str())) {
     Serial.println("OK");

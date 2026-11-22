@@ -1,6 +1,6 @@
 // Configuração (use o mesmo prefixo do código do ESP32)
 export const BROKER = "wss://broker.hivemq.com:8884/mqtt";
-export const PREFIX = "liam/coldchain";
+export const PREFIX = "esp32-temp-monitor/coldchain";
 export const TEMP_MIN = 2, TEMP_MAX = 8, MAX_PTS = 60;
 export const TOL_S = 10;       // tolerância do firmware (s)
 export const STALE_MS = 6000;  // sem dados do dispositivo há mais que isso = aviso
